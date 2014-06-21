@@ -1,0 +1,115 @@
+Practical Machine Learning Assignment
+========================================================
+
+Outline
+-------------
+1. Import data
+2. Clean data
+3. Create training and testing sets
+4. Train Random Forest model with Caret
+5. Estimate test error
+
+
+
+### 1. Import data
+```{r,message=F, warning=F}
+set.seed(123)
+training<-read.csv('pml-training.csv')
+testing<-read.csv('pml-testing.csv')
+
+```
+Both sets are now loaded in the workspace.
+
+
+### 2. Clean data
+Necessary packages
+```{r,message=F, warning=F}
+library(caret)
+library(ggplot2)
+```
+First look at the actual data.
+```{r,message=F, warning=F}
+summary(training)
+```
+We can see that many predictors have predominantly missing entries (NA). The corresponding columns will be removed from both sets by:
+```{r,message=F, warning=F}
+subset.NAs<-sapply(training,function(x)sum(is.na(x))<19000)
+training.nona<-(training[,subset.NAs])
+testing.nona<-testing[,subset.NAs]
+```
+Many other columns have near zero variance and will be removed as well.
+```{r,message=F, warning=F}
+nzv<-nearZeroVar(training.nona)
+training.nona.nonzv<-training.nona[, -nzv]
+testing.nona.nonzv<-testing.nona[, -nzv]
+```
+
+The data.frame is ordered by outcome and shows perfect correlation with variable 'X', which is an index variable. This correlation is therefore fake and X has to be removed.
+Similarly, variable 'num_window' is some kind of rolling count variable and will be removed.
+
+```{r fig.width=7, fig.height=6}
+ggplot(training.nona.nonzv, aes_string(x='X' , fill='classe '))+ geom_density(alpha=.3)
+```
+
+4 variables seem to be user or time specific (*user_name*, *raw_timestamp_part_1*, *raw_timestamp_part_2*, *cvtd_timestamp*) and will be removed as well because they do not generalize to new data in the future.
+
+```{r,message=F, warning=F}
+training.nona.nonzv.nofake<-training.nona.nonzv[,-c(1:6)]
+testing.nona.nonzv.nofake<-testing.nona.nonzv[,-c(1:6)]
+```
+
+```{r,message=F, warning=F}
+sapply(training.nona.nonzv.nofake,class)
+dim(training.nona.nonzv.nofake)
+```
+Only integer and numeric variables remain... great! 
+
+We now have `r dim(training.nona.nonzv.nofake)[1]` observations in `r dim(training.nona.nonzv.nofake)[2]` columns. `r dim(training.nona.nonzv.nofake)[2] - 1` columns are predictors, the last column is the class assignment
+
+### 3. Create training and testing sets
+The supplied training set has many observations relative to the number of predictors. We will split it to have a separate training and testing set with known classes. Accuracy of the model can then be estimated by our own testing set. 
+
+
+```{r,message=F, warning=F}
+my.subset.train<-createDataPartition(training.nona.nonzv.nofake$classe, p = .8,
+                    list = FALSE)
+my.subset.training<-training.nona.nonzv.nofake[my.subset.train,]
+my.subset.testing<-training.nona.nonzv.nofake[-my.subset.train,]
+```
+### 4. Train Random Forest model with Caret
+
+Allow R to use 3 cpu cores if possible on a windows machine.
+```{r,message=F, warning=F}
+library(doParallel)
+cl<-detectCores()
+registerDoParallel(cl-1)
+```
+Fit the Random Forest on the generated training set with standard settings in caret.
+```{r,message=F, warning=F}
+fit.rf<-train(classe~.,method='rf', data=my.subset.training)
+# this takes about 28 minutes on a core i5 with 12GB of RAM.
+```
+
+
+### 5. Estimate test error
+
+Caret uses 25 bootstrap samples and tests three different parameters for 'mtry' as a default setting. 
+```{r,message=F, warning=F}
+fit.rf
+```
+
+```{r fig.width=7, fig.height=6}
+ggplot(fit.rf)
+```
+
+
+The estimated accuracy is well above 99% for mtry=2.
+
+We can now estimate the testing accuracy idependently from the model estimate with our held out test set.
+```{r,message=F, warning=F}
+confusionMatrix(table(predict(fit.rf,newdata=my.subset.testing),my.subset.testing$classe))
+```
+
+The best estimate for the test error on new data is `r confusionMatrix(table(predict(fit.rf,newdata=my.subset.testing),my.subset.testing$classe))$overall[['Accuracy']] *100`%.
+
+On the supplied testing set, the model correctly predicts all 20 examples.
